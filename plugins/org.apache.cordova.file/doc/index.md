@@ -36,6 +36,7 @@ on the subject. For an overview of other storage options, refer to Cordova's
 - iOS
 - Windows Phone 7 and 8*
 - Windows 8*
+- Firefox OS
 
 \* _These platforms do not support `FileReader.readAsArrayBuffer` nor `FileWriter.write(blob)`._
 
@@ -146,6 +147,11 @@ unable to access their previously-stored files.
 
 If your application is new, or has never previously stored files in the
 persistent filesystem, then the "Library" setting is generally recommended.
+
+### Firefox OS Quirks
+
+The File System API is not natively supported by Firefox OS and is implemented
+as a shim on top of indexedDB.
 
 ## Upgrading Notes
 

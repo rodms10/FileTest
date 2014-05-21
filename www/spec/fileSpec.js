@@ -87,8 +87,6 @@ describe("File System", function() {
                 done();
             }, done);
         });
-
-        //TODO test directories
     });
 
     it("Should create a writer", function (done) {
@@ -183,5 +181,143 @@ describe("File System", function() {
                 done();
             }, done);
         }
+    });
+
+    it("should create directory", function (done) {
+        fs.root.getDirectory('PandaPics', {create: true}, function(dirEntry) {
+            expect(dirEntry.isFile).toBeFalsy();
+            expect(dirEntry.isDirectory).toBeTruthy();
+            expect(dirEntry.name).toEqual("PandaPics");
+            expect(dirEntry.fullPath).toEqual("/PandaPics");
+
+            done();
+        }, errorHandler);
+    });
+
+    it("Should return the existing directory when create is true", function(done) {
+        fs.root.getDirectory('PandaPics', {create: true}, function(dirEntry) {
+            expect(dirEntry.isFile).toBeFalsy();
+            expect(dirEntry.isDirectory).toBeTruthy();
+            expect(dirEntry.name).toEqual("PandaPics");
+            expect(dirEntry.fullPath).toEqual("/PandaPics");
+
+            done();
+        }, errorHandler);
+    });
+
+    it("Should fail when creating with exclusive an existing directory", function(done) {
+        fs.root.getDirectory('PandaPics', {create: true, exclusive: true}, function() {
+            expect("Dir should not be created").toBeFalsy();
+
+            done();
+        }, done);
+    });
+
+    it("Should fail when opening a non existing directory with create false", function(done) {
+        fs.root.getDirectory('IH8PandaPics', {create: false}, function() {
+            expect("Dir should not exist").toBeFalsy();
+
+            done();
+        }, done);
+    });
+
+    it("should create subdirectory", function (done) {
+        fs.root.getDirectory('PandaPics', {create: true}, function(dirEntry) {
+            dirEntry.getDirectory('RedPanda', {create: true}, function(subDirEntry) {
+                expect(subDirEntry.isFile).toBeFalsy();
+                expect(subDirEntry.isDirectory).toBeTruthy();
+                expect(subDirEntry.name).toEqual("RedPanda");
+                expect(subDirEntry.fullPath).toEqual("/PandaPics/RedPanda");
+
+                done();
+            }, errorHandler);
+        }, errorHandler);
+    });
+
+    it("should open subdirectory", function (done) {
+        fs.root.getDirectory('PandaPics/RedPanda', {create: false}, function(subDirEntry) {
+            expect(subDirEntry.isFile).toBeFalsy();
+            expect(subDirEntry.isDirectory).toBeTruthy();
+            expect(subDirEntry.name).toEqual("RedPanda");
+            expect(subDirEntry.fullPath).toEqual("/PandaPics/RedPanda");
+
+            done();
+        }, errorHandler);
+    });
+
+    it("should create subdirectory from root", function (done) {
+        fs.root.getDirectory('/PandaPics/DancePanda', {create: true}, function(subDirEntry) {
+            expect(subDirEntry.isFile).toBeFalsy();
+            expect(subDirEntry.isDirectory).toBeTruthy();
+            expect(subDirEntry.name).toEqual("DancePanda");
+            expect(subDirEntry.fullPath).toEqual("/PandaPics/DancePanda");
+
+            done();
+        }, errorHandler);
+    });
+
+    it("should remove directory", function (done) {
+        fs.root.getDirectory('PandaPics/RedPanda', {create: false}, function(dirEntry) {
+            expect(dirEntry.isDirectory).toBeTruthy();
+
+            dirEntry.remove(function() {
+                fs.root.getDirectory('PandaPics/RedPanda', {create: false}, function() {
+                    expect("Dir should have been removed").toBeFalsy();
+                }, done);
+            }, errorHandler);
+
+        }, errorHandler);
+    });
+
+    it("should remove directory recursively", function (done) {
+        fs.root.getDirectory('PandaPics', {create: false}, function(dirEntry) {
+            expect(dirEntry.isDirectory).toBeTruthy();
+
+            dirEntry.removeRecursively(function() {
+                fs.root.getDirectory('PandaPics', {create: false}, function() {
+                    expect("Dir should have been removed").toBeFalsy();
+                }, done);
+            }, errorHandler);
+
+        }, errorHandler);
+    });
+
+    describe("List folder files", function () {
+        var listFs;
+
+        it("init new fs", function (done) {
+            window.requestFileSystem(window.PERSISTENT, 1024*1024, function (fs) {
+                listFs = fs;
+                done();
+            }, errorHandler);
+
+        });
+
+        it("adds 2 files", function (done) {
+            listFs.root.getFile('hello.panda', {create: true}, function(fileEntry) {
+
+                expect(fileEntry.isFile).toBeTruthy();
+
+                listFs.root.getFile('panda.world', {create: true}, function(fileEntry) {
+
+                    expect(fileEntry.isFile).toBeTruthy();
+
+                    done();
+                }, errorHandler);
+            }, errorHandler);
+        });
+
+        it("should read entries", function (done) {
+            var dirReader = listFs.root.createReader();
+
+            dirReader.readEntries(function(results) {
+                expect(results.length).toEqual(2);
+
+                expect(["/hello.panda", "/panda.world"]).toContain(results[0].fullPath);
+                expect(["/hello.panda", "/panda.world"]).toContain(results[1].fullPath);
+
+                done();
+            }, errorHandler);
+        });
     });
 });

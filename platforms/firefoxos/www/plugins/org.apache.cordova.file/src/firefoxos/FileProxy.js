@@ -17,7 +17,7 @@ cordova.define("org.apache.cordova.file.FileProxy", function(require, exports, m
  * specific language governing permissions and limitations
  * under the License.
  *
-*/
+ */
 
 var LocalFileSystem = require('./LocalFileSystem'),
     FileSystem = require('./FileSystem'),
@@ -27,10 +27,9 @@ var LocalFileSystem = require('./LocalFileSystem'),
     File = require('./File');
 
 
-    (function(exports, global) {
+(function(exports, global) {
     var indexedDB = global.indexedDB || global.mozIndexedDB;
-    if (!indexedDB)
-    {
+    if (!indexedDB) {
         throw "indexedDB not supported";
     }
 
@@ -73,7 +72,8 @@ var LocalFileSystem = require('./LocalFileSystem'),
     // list a directory's contents (files and folders).
     var used_ = false;
     exports.readEntries = function(successCallback, errorCallback, args) {
-        var dirEntry_ = args[0];
+        var fullPath = args[0];
+
         if (!successCallback) {
             throw Error('Expected successCallback argument.');
         }
@@ -85,8 +85,8 @@ var LocalFileSystem = require('./LocalFileSystem'),
         // first shot. Then (DirectoryReader has been used), return an empty
         // result array.
         if (!used_) {
-            idb_.getAllEntries(dirEntry_.fullPath, function(entries) {
-                used_= true;
+            idb_.getAllEntries(fullPath, function(entries) {
+                used_ = true;
                 successCallback(entries);
             }, errorCallback);
         } else {
@@ -174,7 +174,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
         }
 
         exports.getFile(function(fileEntry) {
-            var blob_ =  fileEntry.file_.blob_;
+            var blob_ = fileEntry.file_.blob_;
 
             if (!blob_) {
                 blob_ = new Blob([data], {type: data.type});
@@ -240,7 +240,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
         readAs('arrayBuffer', fileName, null, startPos, endPos, successCallback, errorCallback);
     };
 
-    exports.remove = function(successCallback, errorCallback, args) {
+    exports.removeRecursively = exports.remove = function(successCallback, errorCallback, args) {
         var fullPath = args[0];
 
         // TODO: This doesn't protect against directories that have content in it.
@@ -250,11 +250,74 @@ var LocalFileSystem = require('./LocalFileSystem'),
         }, errorCallback);
     };
 
+    exports.getDirectory = function(successCallback, errorCallback, args) {
+        var fullPath = args[0];
+        var path = args[1];
+        var options = args[2];
+
+        // Create an absolute path if we were handed a relative one.
+        path = resolveToFullPath_(fullPath, path);
+
+        idb_.get(path, function(folderEntry) {
+            if (!options) {
+                options = {};
+            }
+
+            if (options.create === true && options.exclusive === true && folderEntry) {
+                // If create and exclusive are both true, and the path already exists,
+                // getDirectory must fail.
+                if (errorCallback) {
+                    errorCallback(FileError.INVALID_MODIFICATION_ERR);
+                }
+            } else if (options.create === true && !folderEntry) {
+                // If create is true, the path doesn't exist, and no other error occurs,
+                // getDirectory must create it as a zero-length file and return a corresponding
+                // MyDirectoryEntry.
+                var name = path.split(DIR_SEPARATOR).pop(); // Just need filename.
+                var dirEntry = new DirectoryEntry(name, path, fs_);
+
+                idb_.put(dirEntry, successCallback, errorCallback);
+            } else if (options.create === true && folderEntry) {
+
+                if (folderEntry.isDirectory) {
+                    // IDB won't save methods, so we need re-create the MyDirectoryEntry.
+                    successCallback(new DirectoryEntry(folderEntry.name, folderEntry.fullPath, folderEntry.fileSystem));
+                } else {
+                    if (errorCallback) {
+                        errorCallback(FileError.INVALID_MODIFICATION_ERR);
+                    }
+                }
+            } else if ((!options.create || options.create === false) && !folderEntry) {
+                // Handle root special. It should always exist.
+                if (path == DIR_SEPARATOR) {
+                    folderEntry = new DirectoryEntry('', DIR_SEPARATOR, fs_);
+                    successCallback(folderEntry);
+                    return;
+                }
+
+                // If create is not true and the path doesn't exist, getDirectory must fail.
+                if (errorCallback) {
+                    errorCallback(FileError.NOT_FOUND_ERR);
+                }
+            } else if ((!options.create || options.create === false) && folderEntry &&
+                folderEntry.isFile) {
+                // If create is not true and the path exists, but is a file, getDirectory
+                // must fail.
+                if (errorCallback) {
+                    errorCallback(FileError.INVALID_MODIFICATION_ERR);
+                }
+            } else {
+                // Otherwise, if no other error occurs, getDirectory must return a
+                // MyDirectoryEntry corresponding to path.
+
+                // IDB won't' save methods, so we need re-create MyDirectoryEntry.
+                successCallback(new DirectoryEntry(folderEntry.name, folderEntry.fullPath, folderEntry.fileSystem));
+            }
+        }, errorCallback);
+    };
 
 
-
-
-
+/*********************************/
 
     // When saving an entry, the fullPath should always lead with a slash and never
     // end with one (e.g. a directory). Also, resolve '.' and '..' to an absolute
@@ -321,13 +384,13 @@ var LocalFileSystem = require('./LocalFileSystem'),
             var fileReader = new FileReader(),
                 blob = fileEntry.file_.blob_.slice(startPos, endPos);
 
-            fileReader.onload = function (e) {
+            fileReader.onload = function(e) {
                 successCallback(e.target.result);
             };
 
             fileReader.onerror = errorCallback;
 
-            switch(what) {
+            switch (what) {
                 case 'text':
                     fileReader.readAsText(blob, encoding);
                     break;
@@ -343,328 +406,6 @@ var LocalFileSystem = require('./LocalFileSystem'),
             }
 
         }, errorCallback, [null, fullPath]);
-    }
-
-
-
-
-
-
-
-
-
-
-
-    /**
-     * Interface to wrap the native File interface.
-     *
-     * This interface is necessary for creating zero-length (empty) files,
-     * something the Filesystem API allows you to do. Unfortunately, File's
-     * constructor cannot be called directly, making it impossible to instantiate
-     * an empty File in JS.
-     *
-     * @param {Object} opts Initial values.
-     * @constructor
-     */
-    function MyFile(opts) {
-        var blob_ = null;
-
-        this.size = opts.size || 0;
-        this.name = opts.name || '';
-        this.type = opts.type || '';
-        this.lastModifiedDate = opts.lastModifiedDate || null;
-
-        // Need some black magic to correct the object's size/name/type based on the
-        // blob that is saved.
-        Object.defineProperty(this, 'blob_', {
-            enumerable: true,
-            get: function() {
-                return blob_;
-            },
-            set: function (val) {
-                blob_ = val;
-                this.size = blob_.size;
-                this.name = blob_.name;
-                this.type = blob_.type;
-                this.lastModifiedDate = blob_.lastModifiedDate;
-            }.bind(this)
-        });
-    }
-    MyFile.prototype.constructor = MyFile;
-
-    /**
-     * Interface supplies information about the state of a file or directory.
-     *
-     * Modeled from:
-     * dev.w3.org/2009/dap/file-system/file-dir-sys.html#idl-def-Metadata
-     *
-     * @constructor
-     */
-    function Metadata(modificationTime, size) {
-        this.modificationTime_ = modificationTime || null;
-        this.size_ = size || 0;
-    }
-
-    Metadata.prototype = {
-        get modificationTime() {
-            return this.modificationTime_;
-        },
-        get size() {
-            return this.size_;
-        }
-    }
-
-    /**
-     * Interface representing entries in a filesystem, each of which may be a File
-     * or MyDirectoryEntry.
-     *
-     * Modeled from:
-     * dev.w3.org/2009/dap/file-system/pub/FileSystem/#idl-def-Entry
-     *
-     * @constructor
-     */
-    function MyEntry() {}
-
-    MyEntry.prototype = {
-        name: null,
-        fullPath: null,
-        filesystem: null,
-        copyTo: function() {
-            throw FileError.NOT_IMPLEMENTED_ERR;
-        },
-        getMetadata: function(successCallback, errorCallback) {
-            if (!successCallback) {
-                throw Error('Expected successCallback argument.');
-            }
-
-            try {
-                if (this.isFile) {
-                    successCallback(
-                        new Metadata(this.file_.lastModifiedDate, this.file_.size));
-                } else {
-                    errorCallback(new MyFileError({code: 1001,
-                        name: 'getMetadata() not implemented for MyDirectoryEntry'}));
-                }
-            } catch(e) {
-                errorCallback && errorCallback(e);
-            }
-        },
-        getParent: function() {
-            throw NOT_IMPLEMENTED_ERR;
-        },
-        moveTo: function() {
-            throw NOT_IMPLEMENTED_ERR;
-        },
-        remove: function(successCallback, errorCallback) {
-            if (!successCallback) {
-                throw Error('Expected successCallback argument.');
-            }
-            // TODO: This doesn't protect against directories that have content in it.
-            // Should throw an error instead if the dirEntry is not empty.
-            idb_['delete'](this.fullPath, function() {
-                successCallback();
-            }, errorCallback);
-        },
-        toURL: function() {
-            var origin = location.protocol + '//' + location.host;
-            return 'filesystem:' + origin + DIR_SEPARATOR + storageType_.toLowerCase() +
-                this.fullPath;
-        },
-    };
-
-    /**
-     * Interface representing a file in the filesystem.
-     *
-     * Modeled from:
-     * dev.w3.org/2009/dap/file-system/pub/FileSystem/#the-fileentry-interface
-     *
-     * @param {FileEntry} opt_fileEntry Optional FileEntry to initialize this
-     *     object from.
-     * @constructor
-     * @extends {MyEntry}
-     */
-    function MyFileEntry(opt_fileEntry) {
-        this.file_ = null;
-
-        Object.defineProperty(this, 'isFile', {
-            enumerable: true,
-            get: function() {
-                return true;
-            }
-        });
-        Object.defineProperty(this, 'isDirectory', {
-            enumerable: true,
-            get: function() {
-                return false;
-            }
-        });
-
-        // Create this entry from properties from an existing MyFileEntry.
-        if (opt_fileEntry) {
-            this.file_ = opt_fileEntry.file_;
-            this.name = opt_fileEntry.name;
-            this.fullPath = opt_fileEntry.fullPath;
-            this.filesystem = opt_fileEntry.filesystem;
-        }
-    }
-    MyFileEntry.prototype = new MyEntry();
-    MyFileEntry.prototype.constructor = MyFileEntry;
-    MyFileEntry.prototype.createWriter = function(callback) {
-        // TODO: figure out if there's a way to dispatch onwrite event as we're writing
-        // data to IDB. Right now, we're only calling onwritend/onerror
-        // MyFileEntry.write().
-        callback(new FileWriter(this));
-    };
-    MyFileEntry.prototype.file = function(successCallback, errorCallback) {
-        if (!successCallback) {
-            throw Error('Expected successCallback argument.');
-        }
-
-        if (this.file_ == null) {
-            if (errorCallback) {
-                errorCallback(FileError.NOT_FOUND_ERR);
-            } else {
-                throw FileError.NOT_FOUND_ERR;
-            }
-            return;
-        }
-
-        // If we're returning a zero-length (empty) file, return the fake file obj.
-        // Otherwise, return the native File object that we've stashed.
-        var file = this.file_.blob_ == null ? this.file_ : this.file_.blob_;
-        file.lastModifiedDate = this.file_.lastModifiedDate;
-
-        // Add Blob.slice() to this wrapped object. Currently won't work :(
-        /*if (!val.slice) {
-         val.slice = Blob.prototype.slice; // Hack to add back in .slice().
-         }*/
-        successCallback(file);
-    };
-
-    /**
-     * Interface representing a directory in the filesystem.
-     *
-     * Modeled from:
-     * dev.w3.org/2009/dap/file-system/pub/FileSystem/#the-directoryentry-interface
-     *
-     * @param {MyDirectoryEntry} opt_folderEntry Optional MyDirectoryEntry to
-     *     initialize this object from.
-     * @constructor
-     * @extends {MyEntry}
-     */
-    function MyDirectoryEntry(opt_folderEntry) {
-        Object.defineProperty(this, 'isFile', {
-            enumerable: true,
-            get: function() {
-                return false;
-            }
-        });
-        Object.defineProperty(this, 'isDirectory', {
-            enumerable: true,
-            get: function() {
-                return true;
-            }
-        });
-
-        // Create this entry from properties from an existing MyDirectoryEntry.
-        if (opt_folderEntry) {
-            this.name = opt_folderEntry.name;
-            this.fullPath = opt_folderEntry.fullPath;
-            this.filesystem = opt_folderEntry.filesystem;
-        }
-    }
-    MyDirectoryEntry.prototype = new MyEntry();
-    MyDirectoryEntry.prototype.constructor = MyDirectoryEntry;
-    MyDirectoryEntry.prototype.createReader = function() {
-        return new DirectoryReader(this);
-    };
-    MyDirectoryEntry.prototype.getDirectory = function(path, options, successCallback,
-                                                     errorCallback) {
-
-        // Create an absolute path if we were handed a relative one.
-        path = resolveToFullPath_(this.fullPath, path);
-
-        idb_.get(path, function(folderEntry) {
-            if (!options) {
-                options = {};
-            }
-
-            if (options.create === true && options.exclusive === true && folderEntry) {
-                // If create and exclusive are both true, and the path already exists,
-                // getDirectory must fail.
-                if (errorCallback) {
-                    errorCallback(FileError.INVALID_MODIFICATION_ERR);
-                }
-            } else if (options.create === true && !folderEntry) {
-                // If create is true, the path doesn't exist, and no other error occurs,
-                // getDirectory must create it as a zero-length file and return a corresponding
-                // MyDirectoryEntry.
-                var dirEntry = new MyDirectoryEntry();
-                dirEntry.name = path.split(DIR_SEPARATOR).pop(); // Just need filename.
-                dirEntry.fullPath = path;
-                dirEntry.filesystem = fs_;
-
-                idb_.put(dirEntry, successCallback, errorCallback);
-            } else if (options.create === true && folderEntry) {
-
-                if (folderEntry.isDirectory) {
-                    // IDB won't save methods, so we need re-create the MyDirectoryEntry.
-                    successCallback(new MyDirectoryEntry(folderEntry));
-                } else {
-                    if (errorCallback) {
-                        errorCallback(FileError.INVALID_MODIFICATION_ERR);
-                        return;
-                    }
-                }
-            } else if ((!options.create || options.create === false) && !folderEntry) {
-                // Handle root special. It should always exist.
-                if (path == DIR_SEPARATOR) {
-                    folderEntry = new MyDirectoryEntry();
-                    folderEntry.name = '';
-                    folderEntry.fullPath = DIR_SEPARATOR;
-                    folderEntry.filesystem = fs_;
-                    successCallback(folderEntry);
-                    return;
-                }
-
-                // If create is not true and the path doesn't exist, getDirectory must fail.
-                if (errorCallback) {
-                    errorCallback(FileError.NOT_FOUND_ERR);
-                    return;
-                }
-            } else if ((!options.create || options.create === false) && folderEntry &&
-                folderEntry.isFile) {
-                // If create is not true and the path exists, but is a file, getDirectory
-                // must fail.
-                if (errorCallback) {
-                    errorCallback(FileError.INVALID_MODIFICATION_ERR);
-                    return;
-                }
-            } else {
-                // Otherwise, if no other error occurs, getDirectory must return a
-                // MyDirectoryEntry corresponding to path.
-
-                // IDB won't' save methods, so we need re-create MyDirectoryEntry.
-                successCallback(new MyDirectoryEntry(folderEntry));
-            }
-        }, errorCallback);
-    };
-
-    MyDirectoryEntry.prototype.removeRecursively = function(successCallback,
-                                                          errorCallback) {
-        if (!successCallback) {
-            throw Error('Expected successCallback argument.');
-        }
-
-        this.remove(successCallback, errorCallback);
-    };
-
-
-    function resolveLocalFileSystemURL(url, callback, errorCallback) {
-        if (errorCallback) {
-            errorCallback(NOT_IMPLEMENTED_ERR);
-            return;
-        }
     }
 
 // Core logic to handle IDB operations =========================================
@@ -703,25 +444,6 @@ var LocalFileSystem = require('./LocalFileSystem'),
     idb_.close = function() {
         this.db.close();
         this.db = null;
-    };
-
-// TODO: figure out if we should ever call this method. The filesystem API
-// doesn't allow you to delete a filesystem once it is 'created'. Users should
-// use the public remove/removeRecursively API instead.
-    idb_.drop = function(successCallback, errorCallback) {
-        if (!this.db) {
-            return;
-        }
-
-        var dbName = this.db.name;
-
-        var request = indexedDB.deleteDatabase(dbName);
-        request.onsuccess = function(e) {
-            successCallback(e);
-        };
-        request.onerror = errorCallback || onError;
-
-        idb_.close();
     };
 
     idb_.get = function(fullPath, successCallback, errorCallback) {
@@ -793,7 +515,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
             if (cursor) {
                 var val = cursor.value;
 
-                results.push(val.isFile ? new FileEntry(val) : new MyDirectoryEntry(val));
+                results.push(val.isFile ? fileEntryFromIdbEntry(val) : new DirectoryEntry(val.name, val.fullPath, val.fileSystem));
                 cursor['continue']();
             }
         };
@@ -829,7 +551,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
         var request = tx.objectStore(FILE_STORE_).put(entry, entry.fullPath);
     };
 
-// Global error handler. Errors bubble from request, to transaction, to db.
+    // Global error handler. Errors bubble from request, to transaction, to db.
     function onError(e) {
         switch (e.target.errorCode) {
             case 12:
@@ -843,15 +565,54 @@ var LocalFileSystem = require('./LocalFileSystem'),
         console.log(e, e.code, e.message);
     }
 
+    /**
+     * Interface to wrap the native File interface.
+     *
+     * This interface is necessary for creating zero-length (empty) files,
+     * something the Filesystem API allows you to do. Unfortunately, File's
+     * constructor cannot be called directly, making it impossible to instantiate
+     * an empty File in JS.
+     *
+     * @param {Object} opts Initial values.
+     * @constructor
+     */
+    function MyFile(opts) {
+        var blob_ = null;
+
+        this.size = opts.size || 0;
+        this.name = opts.name || '';
+        this.type = opts.type || '';
+        this.lastModifiedDate = opts.lastModifiedDate || null;
+
+        // Need some black magic to correct the object's size/name/type based on the
+        // blob that is saved.
+        Object.defineProperty(this, 'blob_', {
+            enumerable: true,
+            get: function() {
+                return blob_;
+            },
+            set: function(val) {
+                blob_ = val;
+                this.size = blob_.size;
+                this.name = blob_.name;
+                this.type = blob_.type;
+                this.lastModifiedDate = blob_.lastModifiedDate;
+            }.bind(this)
+        });
+    }
+
+    MyFile.prototype.constructor = MyFile;
+
+    /*********************************/
+
+
 // Clean up.
-// TODO: decide if this is the best place for this.
+// TODO: Is there a place for this?
 //    global.addEventListener('beforeunload', function(e) {
 //        idb_.db && idb_.db.close();
 //    }, false);
 
-//exports.idb = idb_;
-    exports.resolveLocalFileSystemURL = resolveLocalFileSystemURL;
-})(module.exports, window); // Don't use window because we want to run in workers.
+})(module.exports, window);
 
 require("cordova/exec/proxy").add("File", module.exports);
 
