@@ -26,15 +26,23 @@ var LocalFileSystem = require('./LocalFileSystem'),
     DirectoryEntry = require('./DirectoryEntry'),
     File = require('./File');
 
+/*
+QUIRKS:
+    Does not fail when removing non-empty directories
+    Does not support metadata for directories
+    Does not support requestAllFileSystems
+    Does not support resolveLocalFileSystemURI
+    Methods copyTo and moveTo do not support directories
+
+    Heavily based on https://github.com/ebidel/idb.filesystem.js
+ */
+
 
 (function(exports, global) {
     var indexedDB = global.indexedDB || global.mozIndexedDB;
     if (!indexedDB) {
-        throw "indexedDB not supported";
+        throw "Firefox OS File plugin: indexedDB not supported";
     }
-
-    var NOT_IMPLEMENTED_ERR = new FileError({code: 1000,
-        name: 'Not implemented'});
 
     var fs_ = null;
 
@@ -45,6 +53,8 @@ var LocalFileSystem = require('./LocalFileSystem'),
 
     var DIR_SEPARATOR = '/';
     var DIR_OPEN_BOUND = String.fromCharCode(DIR_SEPARATOR.charCodeAt(0) + 1);
+
+/*** Exported functionality ***/
 
     exports.requestFileSystem = function(successCallback, errorCallback, args) {
         var type = args[0];
@@ -70,7 +80,6 @@ var LocalFileSystem = require('./LocalFileSystem'),
     };
 
     // list a directory's contents (files and folders).
-    var used_ = false;
     exports.readEntries = function(successCallback, errorCallback, args) {
         var fullPath = args[0];
 
@@ -78,20 +87,9 @@ var LocalFileSystem = require('./LocalFileSystem'),
             throw Error('Expected successCallback argument.');
         }
 
-        // This is necessary to mimic the way DirectoryReader.readEntries() should
-        // normally behavior.  According to spec, readEntries() needs to be called
-        // until the length of result array is 0. To handle someone implementing
-        // a recursive call to readEntries(), get everything from indexedDB on the
-        // first shot. Then (DirectoryReader has been used), return an empty
-        // result array.
-        if (!used_) {
-            idb_.getAllEntries(fullPath, function(entries) {
-                used_ = true;
-                successCallback(entries);
-            }, errorCallback);
-        } else {
-            successCallback([]);
-        }
+        idb_.getAllEntries(fullPath, function(entries) {
+            successCallback(entries);
+        }, errorCallback);
     };
 
     exports.getFile = function(successCallback, errorCallback, args) {
@@ -162,6 +160,25 @@ var LocalFileSystem = require('./LocalFileSystem'),
         }, errorCallback, [null, fullPath]);
     };
 
+    exports.getMetadata = function(successCallback, errorCallback, args) {
+        exports.getFile(function (fileEntry) {
+            successCallback(
+                {
+                    modificationTime: fileEntry.file_.lastModifiedDate,
+                    size: fileEntry.file_.lastModifiedDate
+                });
+        }, errorCallback, args);
+    };
+
+    exports.setMetadata = function(successCallback, errorCallback, args) {
+        var fullPath = args[0];
+        var metadataObject = args[1];
+
+        exports.getFile(function (fileEntry) {
+              fileEntry.file_.lastModifiedDate = metadataObject.modificationTime;
+        }, errorCallback, [null, fullPath]);
+    };
+
     exports.write = function(successCallback, errorCallback, args) {
         var fileName = args[0],
             data = args[1],
@@ -201,7 +218,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
             fileEntry.file_.name = blob_.name;
             fileEntry.file_.type = blob_.type;
 
-            idb_.put(fileEntry, function(entry) {
+            idb_.put(fileEntry, function() {
                 successCallback(data.byteLength);
             }, errorCallback);
         }, errorCallback, [null, fileName]);
@@ -316,8 +333,95 @@ var LocalFileSystem = require('./LocalFileSystem'),
         }, errorCallback);
     };
 
+    exports.getParent = function(successCallback, errorCallback, args) {
+        var fullPath = args[0];
 
-/*********************************/
+        if (fullPath === DIR_SEPARATOR) {
+            successCallback(fs_.root);
+            return;
+        }
+
+        var pathArr = fullPath.split(DIR_SEPARATOR);
+        pathArr.pop();
+        var namesa = pathArr.pop();
+        var path = pathArr.join(DIR_SEPARATOR);
+
+        exports.getDirectory(successCallback, errorCallback, [path, namesa, {create: false}]);
+    };
+
+    exports.copyTo = function(successCallback, errorCallback, args) {
+        var srcPath = args[0];
+        var parentFullPath = args[1];
+        var name = args[2];
+
+        // Read src file
+        exports.getFile(function(srcFileEntry) {
+
+            // Create dest file
+            exports.getFile(function(dstFileEntry) {
+
+                exports.write(function() {
+                    successCallback(dstFileEntry);
+                }, errorCallback, [dstFileEntry.fullPath, srcFileEntry.file_.blob_, 0]);
+
+            }, errorCallback, [parentFullPath, name, {create: true}]);
+
+        }, errorCallback, [null, srcPath]);
+    };
+
+    exports.moveTo = function(successCallback, errorCallback, args) {
+        var srcPath = args[0];
+        var parentFullPath = args[1];
+        var name = args[2];
+
+        exports.copyTo(function (fileEntry) {
+
+            exports.remove(function () {
+                successCallback(fileEntry);
+            }, errorCallback, [srcPath]);
+
+        }, errorCallback, args);
+    };
+
+/*** Helpers ***/
+
+    /**
+     * Interface to wrap the native File interface.
+     *
+     * This interface is necessary for creating zero-length (empty) files,
+     * something the Filesystem API allows you to do. Unfortunately, File's
+     * constructor cannot be called directly, making it impossible to instantiate
+     * an empty File in JS.
+     *
+     * @param {Object} opts Initial values.
+     * @constructor
+     */
+    function MyFile(opts) {
+        var blob_ = null;
+
+        this.size = opts.size || 0;
+        this.name = opts.name || '';
+        this.type = opts.type || '';
+        this.lastModifiedDate = opts.lastModifiedDate || null;
+
+        // Need some black magic to correct the object's size/name/type based on the
+        // blob that is saved.
+        Object.defineProperty(this, 'blob_', {
+            enumerable: true,
+            get: function() {
+                return blob_;
+            },
+            set: function(val) {
+                blob_ = val;
+                this.size = blob_.size;
+                this.name = blob_.name;
+                this.type = blob_.type;
+                this.lastModifiedDate = blob_.lastModifiedDate;
+            }.bind(this)
+        });
+    }
+
+    MyFile.prototype.constructor = MyFile;
 
     // When saving an entry, the fullPath should always lead with a slash and never
     // end with one (e.g. a directory). Also, resolve '.' and '..' to an absolute
@@ -408,7 +512,7 @@ var LocalFileSystem = require('./LocalFileSystem'),
         }, errorCallback, [null, fullPath]);
     }
 
-// Core logic to handle IDB operations =========================================
+/*** Core logic to handle IDB operations ***/
 
     idb_.open = function(dbName, successCallback, errorCallback) {
         var self = this;
@@ -564,47 +668,6 @@ var LocalFileSystem = require('./LocalFileSystem'),
 
         console.log(e, e.code, e.message);
     }
-
-    /**
-     * Interface to wrap the native File interface.
-     *
-     * This interface is necessary for creating zero-length (empty) files,
-     * something the Filesystem API allows you to do. Unfortunately, File's
-     * constructor cannot be called directly, making it impossible to instantiate
-     * an empty File in JS.
-     *
-     * @param {Object} opts Initial values.
-     * @constructor
-     */
-    function MyFile(opts) {
-        var blob_ = null;
-
-        this.size = opts.size || 0;
-        this.name = opts.name || '';
-        this.type = opts.type || '';
-        this.lastModifiedDate = opts.lastModifiedDate || null;
-
-        // Need some black magic to correct the object's size/name/type based on the
-        // blob that is saved.
-        Object.defineProperty(this, 'blob_', {
-            enumerable: true,
-            get: function() {
-                return blob_;
-            },
-            set: function(val) {
-                blob_ = val;
-                this.size = blob_.size;
-                this.name = blob_.name;
-                this.type = blob_.type;
-                this.lastModifiedDate = blob_.lastModifiedDate;
-            }.bind(this)
-        });
-    }
-
-    MyFile.prototype.constructor = MyFile;
-
-    /*********************************/
-
 
 // Clean up.
 // TODO: Is there a place for this?

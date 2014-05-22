@@ -320,4 +320,91 @@ describe("File System", function() {
             }, errorHandler);
         });
     });
+
+    describe("Copy Move tests", function () {
+        it("adds a file", function (done) {
+
+            fs.root.getDirectory('PandaPics', {create: true}, function(dirEntry) {
+
+                fs.root.getFile('/PandaPics/origPanda.txt', {create: true}, function(fileEntry) {
+                    fileEntry.createWriter(function(fileWriter) {
+
+                        fileWriter.onwriteend = function(e) {
+                            done();
+                        };
+
+                        fileWriter.onerror = function(e) {
+                            expect("Failed to write").toBeFalsy();
+                        };
+
+                        var blob = new Blob(['Sad Panda'], {type: 'text/plain'});
+
+                        fileWriter.write(blob);
+                    }, errorHandler);
+                }, errorHandler);
+
+            }, errorHandler);
+        });
+
+        it("should copy", function (done) {
+            fs.root.getFile('/PandaPics/origPanda.txt', {}, function(fileEntry) {
+
+                fs.root.getDirectory('/PandaPics', {}, function(dirEntry) {
+                    fileEntry.copyTo(dirEntry, 'fakePanda.txt', function() {
+                        check(done);
+                    }, errorHandler);
+                }, errorHandler);
+
+            }, errorHandler);
+
+            function check(done) {
+                fs.root.getFile('/PandaPics/fakePanda.txt', {create: false}, function(fileEntry) {
+                    fileEntry.file(function(file) {
+                        var reader = new FileReader();
+
+                        reader.onloadend = function() {
+                            expect(this.result).toEqual('Sad Panda');
+
+                            done();
+                        };
+
+                        reader.readAsText(file);
+                    }, errorHandler);
+                }, errorHandler);
+            }
+        });
+
+        it("should move", function (done) {
+            fs.root.getFile('/PandaPics/fakePanda.txt', {}, function(fileEntry) {
+
+                fs.root.getDirectory('/PandaPics', {}, function(dirEntry) {
+                    fileEntry.moveTo(dirEntry, 'dummyPanda.txt', function() {
+                        check(done);
+                    }, errorHandler);
+                }, errorHandler);
+
+            }, errorHandler);
+
+            function check(done) {
+                fs.root.getFile('/PandaPics/dummyPanda.txt', {create: false}, function(fileEntry) {
+                    fileEntry.file(function(file) {
+                        var reader = new FileReader();
+
+                        reader.onloadend = function() {
+                            expect(this.result).toEqual('Sad Panda');
+
+                            // Check if original file was removed
+                            fs.root.getFile('/PandaPics/fakePanda.txt', {create: false}, function() {
+                                expect("File should have been deleted").toBeFalsy();
+
+                                done();
+                            }, done);
+                        };
+
+                        reader.readAsText(file);
+                    }, errorHandler);
+                }, errorHandler);
+            }
+        });
+    });
 });

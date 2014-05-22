@@ -151,7 +151,12 @@ persistent filesystem, then the "Library" setting is generally recommended.
 ### Firefox OS Quirks
 
 The File System API is not natively supported by Firefox OS and is implemented
-as a shim on top of indexedDB.
+as a shim on top of indexedDB. 
+ 
+* Does not fail when removing non-empty directories
+* Does not support metadata for directories
+* Does not support `requestAllFileSystems` and `resolveLocalFileSystemURI` methods
+* Methods `copyTo` and `moveTo` do not support directories
 
 ## Upgrading Notes
 
