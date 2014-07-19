@@ -19,8 +19,11 @@
  *
 */
 
+FILESYSTEM_PREFIX = "cdvfile://";
+
 module.exports = {
-    createReader: function() {
-        return new DirectoryReader(this.fullPath);
+    __format__: function(fullPath) {
+        return (FILESYSTEM_PREFIX + this.name + (fullPath[0] === '/' ? '' : '/') + encodeURI(fullPath));
     }
 };
+

@@ -10,30 +10,18 @@ describe("File System", function() {
     it("Clear db. Ugh, ugly. Where is setup?", function (done) {
         var indexedDB = window.indexedDB || window.mozIndexedDB;
 
-        var namePrefix = (location.protocol + location.host).replace(/:/g, '_') + '_';
-        var count = 0;
+        var databaseName = (location.protocol + location.host).replace(/:/g, '_');
 
-        var types = [
-            'Temporary',
-            'Persistent'
-        ];
+        var req = indexedDB.deleteDatabase(databaseName);
+        req.onsuccess = function() {
+            console.log("Deleted database successfully");
 
-        types.forEach(function(type) {
-            var databaseName = namePrefix + type;
-            var req = indexedDB.deleteDatabase(databaseName);
-            req.onsuccess = function() {
-                console.log("Deleted database successfully");
+            done();
+        };
 
-                count++;
-                if (count === types.length) {
-                    done();
-                }
-            };
-
-            req.onerror = function() {
-                console.log("Couldn't delete database");
-            };
-        });
+        req.onerror = function() {
+            console.log("Couldn't delete database");
+        };
     });
 
     it("Should create a file system", function(done) {

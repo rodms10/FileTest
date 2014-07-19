@@ -426,7 +426,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     } else {
         NSString* fullPath = @"/";
         // check for avail space for size request
-        NSNumber* pNumAvail = [self checkFreeDiskSpace:fullPath];
+        NSNumber* pNumAvail = [self checkFreeDiskSpace:self.rootDocsPath];
         // NSLog(@"Free space: %@", [NSString stringWithFormat:@"%qu", [ pNumAvail unsignedLongLongValue ]]);
         if (pNumAvail && ([pNumAvail unsignedLongLongValue] < size)) {
             result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:QUOTA_EXCEEDED_ERR];
@@ -455,6 +455,36 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
         [ret addObject:[self makeEntryForPath:@"/" fileSystemName:root.name isDirectory:YES]];
     }
     CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:ret];
+    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+}
+
+- (void)requestAllPaths:(CDVInvokedUrlCommand*)command
+{
+    NSString* libPath = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)[0];
+    NSString* libPathSync = [libPath stringByAppendingPathComponent:@"Cloud"];
+    NSString* libPathNoSync = [libPath stringByAppendingPathComponent:@"NoCloud"];
+    NSString* docPath = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSString* storagePath = [libPath stringByDeletingLastPathComponent];
+    NSString* cachePath = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES)[0];
+
+    // Create the directories if necessary.
+    [[NSFileManager defaultManager] createDirectoryAtPath:libPathSync withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSFileManager defaultManager] createDirectoryAtPath:libPathNoSync withIntermediateDirectories:YES attributes:nil error:nil];
+    // Mark NoSync as non-iCloud.
+    [[NSURL fileURLWithPath:libPathNoSync] setResourceValue: [NSNumber numberWithBool: YES]
+                                                     forKey: NSURLIsExcludedFromBackupKey error:nil];
+
+    NSDictionary* ret = @{
+        @"applicationDirectory": [[NSURL fileURLWithPath:[[NSBundle mainBundle] bundlePath]] absoluteString],
+        @"applicationStorageDirectory": [[NSURL fileURLWithPath:storagePath] absoluteString],
+        @"dataDirectory": [[NSURL fileURLWithPath:libPathNoSync] absoluteString],
+        @"syncedDataDirectory": [[NSURL fileURLWithPath:libPathSync] absoluteString],
+        @"documentsDirectory": [[NSURL fileURLWithPath:docPath] absoluteString],
+        @"cacheDirectory": [[NSURL fileURLWithPath:cachePath] absoluteString],
+        @"tempDirectory": [[NSURL fileURLWithPath:NSTemporaryDirectory()] absoluteString]
+    };
+
+    CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:ret];
     [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
 }
 

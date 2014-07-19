@@ -130,12 +130,27 @@ module.exports = [
         "file": "plugins/org.apache.cordova.file/src/firefoxos/FileProxy.js",
         "id": "org.apache.cordova.file.FileProxy",
         "runs": true
+    },
+    {
+        "file": "plugins/org.apache.cordova.file/www/fileSystemPaths.js",
+        "id": "org.apache.cordova.file.fileSystemPaths",
+        "merges": [
+            "cordova"
+        ],
+        "runs": true
+    },
+    {
+        "file": "plugins/org.apache.cordova.file/www/firefoxos/FileSystem.js",
+        "id": "org.apache.cordova.file.firefoxFileSystem",
+        "merges": [
+            "window.FileSystem"
+        ]
     }
 ];
 module.exports.metadata = 
 // TOP OF METADATA
 {
-    "org.apache.cordova.file": "1.1.1-dev"
+    "org.apache.cordova.file": "1.2.1-dev"
 }
 // BOTTOM OF METADATA
 });
